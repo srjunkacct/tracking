@@ -1,0 +1,63 @@
+# IDE-specific files and folders
+.idea/
+*.iml
+
+# Build artifacts
+/target/
+/out/
+/build/
+
+# Maven/Gradle specific
+.gradle/
+pom.xml.tag
+pom.xml.swap
+pom.xml.bak
+pom.xml.versions
+pom.xml.mversions
+build/
+target/
+
+# Java specific
+*.class
+
+# Log files and other temporary files
+*.log
+/logs/
+/temp/
+
+# Python virtual environment
+venv/
+env/
+ENV/
+.venv/
+lib/python*/site-packages/
+
+# Python artifacts and build files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+.Python
+build/
+dist/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+
+# OS-specific files
+.DS_Store # macOS
+Thumbs.db # Windows
+
+# Temporary files and logs
+*.log
+tmp/
+*.sqlite3 # Example for common development database files
+
+# Secret files (if applicable, add your specific file names)
+*.env
+.pypirc
+secrets.toml
+
+#Mac specific
+.DS_Store
