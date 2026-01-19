@@ -17,8 +17,6 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Any
 
 from numpy import dtype, ndarray
-from numpy._core.multiarray import _ScalarT
-
 
 @dataclass
 class IOUParams:
@@ -154,8 +152,8 @@ class KalmanFilter:
         then compute the updated mean and covariance.
         """
         x_position = self.x[0:2]
-        P_position = self.p[0:2, 0:2]
-        cholesky_factorization = P_position.linalg.cholesky(P_position)
+        P_position = self.P[0:2, 0:2]
+        cholesky_factorization = np.linalg.cholesky(P_position)
         cholesky_vectors = cholesky_factorization[:, 0], cholesky_factorization[:, 1]
         particles = [x_position,
                      x_position + cholesky_vectors[0],
@@ -164,14 +162,20 @@ class KalmanFilter:
                      x_position - cholesky_vectors[1]]
         particle_weights = [ l(p) for p in particles ]
         sum_weights = np.sum(particle_weights)
+        if (sum_weights < 1e-6):
+            return
         normalized_weights = [ w / sum_weights for w in particle_weights ]
-        updated_mean = np.sum( normalized_weights[i] * particles[i] for i in range(0,5) )
+        updated_mean = sum( normalized_weights[i] * particles[i] for i in range(0,5) )
         residuals = [ updated_mean - p for p in particles ]
         residual_matrix = np.column_stack(residuals)
         weight_diagonal = np.diag(normalized_weights)
         updated_covariance = residual_matrix @ weight_diagonal @ residual_matrix.T
-        self.x = updated_mean.copy()
-        self.P = updated_covariance.copy()
+        # Insert updated position mean into x and updated position covariance into P.
+        # Clear out the cross-covariance terms in P.
+        self.x[0:2] = updated_mean.copy()
+        self.P[0:2, 0:2] = updated_covariance.copy()
+        self.P[0:2, 2:4] = np.zeros((2, 2))
+        self.P[2:4, 0:2] = np.zeros((2, 2))
 
 class IOUTracker:
     """
@@ -243,7 +247,7 @@ class IOUTracker:
 
     def likelihood_update(self, l: Callable[[np.ndarray], float] ) -> None:
         """Update with a likelihood function"""
-        self.kf.update(self, l)
+        self.kf.update_likelihood(l)
 
     @property
     def position(self) -> np.ndarray:
@@ -439,7 +443,7 @@ def run_targeted_sample():
                                                        footprint_radius,
                                                        detection_prob,
                                                        rng)
-        if next_measurement:
+        if next_measurement is not None:
             tracker.update( next_measurement )
             measurements.append( next_measurement)
             meas_indices.append( time_index)
@@ -452,14 +456,14 @@ def run_targeted_sample():
         position_stds.append(np.sqrt(np.diag(tracker.position_covariance)))
         filter_times.append( time_index * dt )
 
-    position_error = plot_results(estimated_positions,
-                                  estimated_velocities,
-                                  filter_times,
+    position_error = plot_results(np.array(estimated_positions),
+                                  np.array(estimated_velocities),
+                                  np.array(filter_times),
                                   meas_indices,
                                   meas_times,
                                   measurement_noise_std,
-                                  measurements,
-                                  position_stds,
+                                  np.array(measurements),
+                                  np.array(position_stds),
                                   times,
                                   true_positions,
                                   true_velocities)
@@ -552,14 +556,17 @@ def run_example():
     print(f"Final position error: {position_error[-1]:.3f}")
 
 
-def plot_results(estimated_positions: ndarray[tuple[Any, ...], dtype[_ScalarT]],
-                 estimated_velocities: ndarray[tuple[Any, ...], dtype[_ScalarT]],
-                 filter_times: ndarray[tuple[Any, ...], dtype[_ScalarT]], meas_indices: list[int],
-                 meas_times: ndarray[tuple[Any, ...], Any], measurement_noise_std: float,
-                 measurements: ndarray[tuple[Any, ...], dtype[Any]],
-                 position_stds: ndarray[tuple[Any, ...], dtype[_ScalarT]], times: ndarray[tuple[Any, ...], dtype[Any]],
-                 true_positions: ndarray[tuple[Any, ...], dtype[Any]],
-                 true_velocities: ndarray[tuple[Any, ...], dtype[Any]]) -> Any:
+def plot_results(estimated_positions: np.ndarray,
+                 estimated_velocities: np.ndarray,
+                 filter_times: list[float],
+                 meas_indices: list[int],
+                 meas_times: list[float],
+                 measurement_noise_std: float,
+                 measurements: np.ndarray,
+                 position_stds: np.ndarray,
+                 times: list[float],
+                 true_positions: np.ndarray,
+                 true_velocities: np.ndarray) -> None:
     # Plotting
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
@@ -629,4 +636,4 @@ def plot_results(estimated_positions: ndarray[tuple[Any, ...], dtype[_ScalarT]],
 
 
 if __name__ == "__main__":
-    run_example()
+    run_targeted_sample()
