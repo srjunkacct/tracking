@@ -387,10 +387,11 @@ def generate_measurements(
     return indices, np.array(measurements)
 
 
-def run_targeted_sample():
+def run_targeted_sample( random_seed: 42,
+                         show_plot: True ):
     """Run an example simulation with the sensor aiming the track center, and plot results"""
     # Set random seed for reproducibility
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(random_seed)
 
     # Simulation parameters
     duration = 10 * 3600.0  # seconds
@@ -466,16 +467,17 @@ def run_targeted_sample():
                                   np.array(position_stds),
                                   times,
                                   true_positions,
-                                  true_velocities)
+                                  true_velocities,
+                            show_plot)
 
     print(f"Simulation complete!")
     print(f"Mean position error: {np.nanmean(position_error):.3f}")
     print(f"Final position error: {position_error[-1]:.3f}")
 
-def run_example():
+def run_example( random_seed: 42):
     """Run an example simulation and plot results."""
     # Set random seed for reproducibility
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(random_seed)
 
     # Simulation parameters
     duration = 10 * 3600.0  # seconds
@@ -566,7 +568,8 @@ def plot_results(estimated_positions: np.ndarray,
                  position_stds: np.ndarray,
                  times: list[float],
                  true_positions: np.ndarray,
-                 true_velocities: np.ndarray) -> None:
+                 true_velocities: np.ndarray,
+                 show: bool = True) -> None:
     # Plotting
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
@@ -629,11 +632,12 @@ def plot_results(estimated_positions: np.ndarray,
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.savefig('kalman_iou_results.png', dpi=150)
-    plt.show()
+    if show:
+        plt.tight_layout()
+        plt.savefig('kalman_iou_results.png', dpi=150)
+        plt.show()
     return position_error
 
 
 if __name__ == "__main__":
-    run_targeted_sample()
+    run_targeted_sample(0, False)
