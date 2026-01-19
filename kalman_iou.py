@@ -436,9 +436,9 @@ def run_targeted_sample():
 
     for time_index in range(1, num_time_steps):
         # Grab the state at the current time, and advance it to the time_index time
-        predicted_mean, predicted_covariance = tracker.return_prediction( dt )
+        tracker.predict( dt )
         next_measurement = generate_single_measurement(true_positions[time_index],
-                                                       tracker.position,
+                                                       tracker.position.copy(),
                                                        measurement_noise_std,
                                                        footprint_radius,
                                                        detection_prob,
@@ -449,7 +449,7 @@ def run_targeted_sample():
             meas_indices.append( time_index)
             meas_times.append( time_index * dt )
         else:
-            likelihood = lambda location : detection_prob if np.linalg.norm( true_positions[time_index] - tracker.position ) < footprint_radius else 0.0
+            likelihood = lambda look_location : detection_prob if np.linalg.norm( true_positions[time_index] - look_location ) < footprint_radius else 0.0
             tracker.likelihood_update(likelihood)
         estimated_positions.append(tracker.position.copy())
         estimated_velocities.append(tracker.velocity.copy())
