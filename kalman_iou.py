@@ -10,10 +10,14 @@ where β = 1/τ (τ is the relaxation time) and σ is the diffusion coefficient.
 """
 from idlelib.debugger_r import restart_subprocess_debugger
 
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
+
+from numpy import dtype, ndarray
+from numpy._core.multiarray import _ScalarT
 
 
 @dataclass
@@ -113,6 +117,12 @@ class KalmanFilter:
         self.x = F @ self.x
         self.P = F @ self.P @ F.T + Q
 
+    def return_prediction(self, F: np.ndarray, Q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Return the predicted new mean and covariance
+        """
+        return F @ self.x, F @ self.P @ F.T + Q
+
     def update(self, z: np.ndarray, H: np.ndarray, R: np.ndarray) -> None:
         """
         Update step: incorporate a measurement.
@@ -136,7 +146,7 @@ class KalmanFilter:
         I = np.eye(len(self.x))
         self.P = (I - K @ H) @ self.P
 
-    def update_likelihood(self, l: Callable[[np.ndarray], np.ndarray]) -> None:
+    def update_likelihood(self, l: Callable[[np.ndarray], float]) -> None:
         """
         Update step:  incorporate an arbitrary likelihood function.
         To do this, we decompose the current state into particles using a Cholesky factorization
@@ -221,9 +231,19 @@ class IOUTracker:
         Q = iou_process_noise(dt, self.iou_params.beta, self.iou_params.sigma)
         self.kf.predict(F, Q)
 
+    def return_prediction(self, dt: float) -> tuple[np.ndarray, np.ndarray]:
+        """Return predicted state"""
+        F = iou_transition_matrix(dt, self.iou_params.beta)
+        Q = iou_process_noise(dt, self.iou_params.beta, self.iou_params.sigma)
+        return self.kf.return_prediction(F, Q)
+
     def update(self, measurement: np.ndarray) -> None:
         """Update with a position measurement [x, y]."""
         self.kf.update(measurement, self.H, self.R)
+
+    def likelihood_update(self, l: Callable[[np.ndarray], float] ) -> None:
+        """Update with a likelihood function"""
+        self.kf.update(self, l)
 
     @property
     def position(self) -> np.ndarray:
@@ -249,7 +269,6 @@ def straight_line_trajectory(
     """
     Create a straight line constant speed trajectory in the x-direction, starting at [0,0]
     """
-
     n_steps = int(duration / dt) + 1
     times = np.linspace(0, duration, n_steps)
     positions = np.zeros((n_steps, 2))
@@ -312,6 +331,28 @@ def simulate_iou_trajectory(
 
     return times, positions, velocities
 
+def generate_single_measurement(
+        ground_truth_position: np.ndarray,
+        look_location: np.ndarray,
+        noise_std: float,
+        footprint_radius: float,
+        detection_prob: float = 1.0,
+        rng: Optional[np.random.Generator] = None,
+) -> Optional[np.ndarray]:
+    """
+    Simulate the outcome of looking for the target at the given location.
+    Returns: a measurement location if the target was detected, empty if not.
+    """
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    if rng.random() < detection_prob:
+        if np.linalg.norm( ground_truth_position - look_location ) < footprint_radius:
+            noise = rng.normal(0, noise_std, size=2)
+            return ground_truth_position + noise
+
+    return None
 
 def generate_measurements(
     positions: np.ndarray,
@@ -341,6 +382,91 @@ def generate_measurements(
 
     return indices, np.array(measurements)
 
+
+def run_targeted_sample():
+    """Run an example simulation with the sensor aiming the track center, and plot results"""
+    # Set random seed for reproducibility
+    rng = np.random.default_rng(42)
+
+    # Simulation parameters
+    duration = 10 * 3600.0  # seconds
+    dt = 60.0  # time step
+
+    # IOU parameters
+    iou_params = IOUParams(
+        tau=47800.0,  # 47800 second relaxation time
+        sigma=0.10,  # diffusion coefficient, sigma^2 *2*tau = velocity variance
+    )
+
+    # Measurement parameters
+    measurement_noise_std = 5.0 * 1852.0
+    footprint_radius = 5.0 * 1852.0
+    detection_prob = 0.8  # 80% detection rate
+
+    # Initial conditions
+    initial_position = np.array([0.0, 0.0])
+    initial_velocity = np.array([15.0, 0.0])
+
+    times, true_positions, true_velocities = straight_line_trajectory(
+        duration, dt, initial_velocity[0]
+    )
+
+    num_time_steps = math.floor(duration / dt)
+
+    # Initialize tracker with first measurement
+    tracker = IOUTracker(
+        iou_params=iou_params,
+        measurement_noise_std=measurement_noise_std,
+        initial_position=initial_position,
+        initial_position_std=measurement_noise_std,
+        initial_velocity_std=15.0,
+    )
+
+    estimated_positions = [tracker.position.copy()]
+    estimated_velocities = [tracker.velocity.copy()]
+    position_stds = [np.sqrt(np.diag(tracker.position_covariance))]
+    filter_times = [0.0]
+    meas_indices = [0]
+    meas_times = [0.0]
+    measurements = [initial_position]
+
+    for time_index in range(1, num_time_steps):
+        # Grab the state at the current time, and advance it to the time_index time
+        predicted_mean, predicted_covariance = tracker.return_prediction( dt )
+        next_measurement = generate_single_measurement(true_positions[time_index],
+                                                       tracker.position,
+                                                       measurement_noise_std,
+                                                       footprint_radius,
+                                                       detection_prob,
+                                                       rng)
+        if next_measurement:
+            tracker.update( next_measurement )
+            measurements.append( next_measurement)
+            meas_indices.append( time_index)
+            meas_times.append( time_index * dt )
+        else:
+            likelihood = lambda location : detection_prob if np.linalg.norm( true_positions[time_index] - tracker.position ) < footprint_radius else 0.0
+            tracker.likelihood_update(likelihood)
+        estimated_positions.append(tracker.position.copy())
+        estimated_velocities.append(tracker.velocity.copy())
+        position_stds.append(np.sqrt(np.diag(tracker.position_covariance)))
+        filter_times.append( time_index * dt )
+
+    position_error = plot_results(estimated_positions,
+                                  estimated_velocities,
+                                  filter_times,
+                                  meas_indices,
+                                  meas_times,
+                                  measurement_noise_std,
+                                  measurements,
+                                  position_stds,
+                                  times,
+                                  true_positions,
+                                  true_velocities)
+
+    print(f"Simulation complete!")
+    print(f"Mean position error: {np.nanmean(position_error):.3f}")
+    print(f"Final position error: {position_error[-1]:.3f}")
 
 def run_example():
     """Run an example simulation and plot results."""
@@ -417,6 +543,23 @@ def run_example():
     position_stds = np.array(position_stds)
     filter_times = np.array(filter_times)
 
+    position_error = plot_results(estimated_positions, estimated_velocities, filter_times, meas_indices, meas_times,
+                                  measurement_noise_std, measurements, position_stds, times, true_positions,
+                                  true_velocities)
+
+    print(f"Simulation complete!")
+    print(f"Mean position error: {np.nanmean(position_error):.3f}")
+    print(f"Final position error: {position_error[-1]:.3f}")
+
+
+def plot_results(estimated_positions: ndarray[tuple[Any, ...], dtype[_ScalarT]],
+                 estimated_velocities: ndarray[tuple[Any, ...], dtype[_ScalarT]],
+                 filter_times: ndarray[tuple[Any, ...], dtype[_ScalarT]], meas_indices: list[int],
+                 meas_times: ndarray[tuple[Any, ...], Any], measurement_noise_std: float,
+                 measurements: ndarray[tuple[Any, ...], dtype[Any]],
+                 position_stds: ndarray[tuple[Any, ...], dtype[_ScalarT]], times: ndarray[tuple[Any, ...], dtype[Any]],
+                 true_positions: ndarray[tuple[Any, ...], dtype[Any]],
+                 true_velocities: ndarray[tuple[Any, ...], dtype[Any]]) -> Any:
     # Plotting
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
@@ -438,8 +581,8 @@ def run_example():
     ax.plot(filter_times, estimated_positions[:, 0], 'r--', label='Estimate', linewidth=1.5)
     ax.fill_between(
         filter_times,
-        estimated_positions[:, 0] - 2*position_stds[:, 0],
-        estimated_positions[:, 0] + 2*position_stds[:, 0],
+        estimated_positions[:, 0] - 2 * position_stds[:, 0],
+        estimated_positions[:, 0] + 2 * position_stds[:, 0],
         color='r', alpha=0.2, label='±2σ'
     )
     ax.scatter(meas_times, measurements[:, 0], c='g', s=20, alpha=0.5, label='Measurements')
@@ -482,10 +625,7 @@ def run_example():
     plt.tight_layout()
     plt.savefig('kalman_iou_results.png', dpi=150)
     plt.show()
-
-    print(f"Simulation complete!")
-    print(f"Mean position error: {np.nanmean(position_error):.3f}")
-    print(f"Final position error: {position_error[-1]:.3f}")
+    return position_error
 
 
 if __name__ == "__main__":
