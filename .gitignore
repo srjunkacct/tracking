@@ -52,6 +52,7 @@ Thumbs.db # Windows
 # Temporary files and logs
 *.log
 tmp/
+*.png
 *.sqlite3 # Example for common development database files
 
 # Secret files (if applicable, add your specific file names)
@@ -61,3 +62,5 @@ secrets.toml
 
 #Mac specific
 .DS_Store
+
+

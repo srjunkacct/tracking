@@ -8,11 +8,12 @@ State vector: [x, y, vx, vy]
 The OU process: dv = -β*v*dt + σ*dW
 where β = 1/τ (τ is the relaxation time) and σ is the diffusion coefficient.
 """
+from idlelib.debugger_r import restart_subprocess_debugger
 
 import numpy as np
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Callable
 
 
 @dataclass
@@ -135,6 +136,32 @@ class KalmanFilter:
         I = np.eye(len(self.x))
         self.P = (I - K @ H) @ self.P
 
+    def update_likelihood(self, l: Callable[[np.ndarray], np.ndarray]) -> None:
+        """
+        Update step:  incorporate an arbitrary likelihood function.
+        To do this, we decompose the current state into particles using a Cholesky factorization
+        of the covariance.  We then reweight the particles according to the likelihood function,
+        then compute the updated mean and covariance.
+        """
+        x_position = self.x[0:2]
+        P_position = self.p[0:2, 0:2]
+        cholesky_factorization = P_position.linalg.cholesky(P_position)
+        cholesky_vectors = cholesky_factorization[:, 0], cholesky_factorization[:, 1]
+        particles = [x_position,
+                     x_position + cholesky_vectors[0],
+                     x_position - cholesky_vectors[0],
+                     x_position + cholesky_vectors[1],
+                     x_position - cholesky_vectors[1]]
+        particle_weights = [ l(p) for p in particles ]
+        sum_weights = np.sum(particle_weights)
+        normalized_weights = [ w / sum_weights for w in particle_weights ]
+        updated_mean = np.sum( normalized_weights[i] * particles[i] for i in range(0,5) )
+        residuals = [ updated_mean - p for p in particles ]
+        residual_matrix = np.column_stack(residuals)
+        weight_diagonal = np.diag(normalized_weights)
+        updated_covariance = residual_matrix @ weight_diagonal @ residual_matrix.T
+        self.x = updated_mean.copy()
+        self.P = updated_covariance.copy()
 
 class IOUTracker:
     """
@@ -212,6 +239,26 @@ class IOUTracker:
     def position_covariance(self) -> np.ndarray:
         """Position covariance (2x2)."""
         return self.kf.P[:2, :2]
+
+
+def straight_line_trajectory(
+        duration: float,
+        dt: float,
+        velocity: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Create a straight line constant speed trajectory in the x-direction, starting at [0,0]
+    """
+
+    n_steps = int(duration / dt) + 1
+    times = np.linspace(0, duration, n_steps)
+    positions = np.zeros((n_steps, 2))
+    velocities = np.zeros((n_steps, 2))
+    x_positions = times * velocity
+    x_velocities = np.ones(n_steps) * velocity
+    positions[:, 0] = x_positions
+    velocities[:, 0] = x_velocities
+    return times, positions, velocities
 
 
 def simulate_iou_trajectory(
@@ -301,27 +348,31 @@ def run_example():
     rng = np.random.default_rng(42)
 
     # Simulation parameters
-    duration = 20.0  # seconds
-    dt = 0.1  # time step
+    duration = 10 * 3600.0  # seconds
+    dt = 60.0  # time step
 
     # IOU parameters
     iou_params = IOUParams(
-        tau=2.0,  # 2 second relaxation time
-        sigma=1.0,  # diffusion coefficient
+        tau=47800.0,  # 47800 second relaxation time
+        sigma=0.10 ,  # diffusion coefficient, sigma^2 *2*tau = velocity variance
     )
 
     # Measurement parameters
-    measurement_noise_std = 0.5
+    measurement_noise_std = 5.0 * 1852.0
     detection_prob = 0.8  # 80% detection rate
 
     # Initial conditions
     initial_position = np.array([0.0, 0.0])
-    initial_velocity = np.array([2.0, 1.0])
+    initial_velocity = np.array([15.0, 0.0])
 
     # Simulate ground truth
-    times, true_positions, true_velocities = simulate_iou_trajectory(
-        duration, dt, iou_params, initial_position, initial_velocity, rng
-    )
+    #times, true_positions, true_velocities = simulate_iou_trajectory(
+    #    duration, dt, iou_params, initial_position, initial_velocity, rng
+    #)
+
+    times, true_positions, true_velocities = straight_line_trajectory(
+        duration, dt, initial_velocity[0]
+     )
 
     # Generate measurements
     meas_indices, measurements = generate_measurements(
@@ -335,7 +386,7 @@ def run_example():
         measurement_noise_std=measurement_noise_std,
         initial_position=measurements[0],
         initial_position_std=measurement_noise_std,
-        initial_velocity_std=2.0,
+        initial_velocity_std=15.0,
     )
 
     # Run the filter
